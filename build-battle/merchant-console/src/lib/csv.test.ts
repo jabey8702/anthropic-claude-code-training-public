@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest"
 import { Payment } from "@/data/types"
-import { EXPORT_COLUMNS, exportFilename, toCsv } from "./csv"
+import {
+  DEFAULT_EXPORT_COLUMNS,
+  EXPORT_COLUMNS,
+  exportFilename,
+  exportLabel,
+  parseExportColumns,
+  parseExportScope,
+  toCsv,
+} from "./csv"
 
 /**
  * The export is the file ops hands to a merchant, so a broken cell is a
@@ -81,5 +89,76 @@ describe("exportFilename", () => {
     expect(exportFilename(new Date("2026-03-14T23:00:00.000Z"))).toBe(
       "payments-2026-03-14.csv",
     )
+  })
+
+  it("puts the scope label before the date", () => {
+    const date = new Date("2026-08-13T09:00:00.000Z")
+    expect(exportFilename(date, "disputed")).toBe("payments-disputed-2026-08-13.csv")
+    expect(exportFilename(date, "all")).toBe("payments-all-2026-08-13.csv")
+  })
+})
+
+describe("parseExportColumns", () => {
+  it("defaults to every column except the card last four", () => {
+    expect(parseExportColumns(null)).toEqual([...DEFAULT_EXPORT_COLUMNS])
+    expect(DEFAULT_EXPORT_COLUMNS).not.toContain("last4")
+    expect(DEFAULT_EXPORT_COLUMNS).toContain("currency")
+  })
+
+  it("keeps the requested columns in the order given", () => {
+    expect(parseExportColumns("amount,id,last4")).toEqual(["amount", "id", "last4"])
+  })
+
+  it("drops duplicates and stray whitespace", () => {
+    expect(parseExportColumns(" id, id ,amount")).toEqual(["id", "amount"])
+  })
+
+  it("rejects an unknown column rather than skipping it", () => {
+    expect(parseExportColumns("id,card_number")).toBeNull()
+    expect(parseExportColumns("id;DROP TABLE payments")).toBeNull()
+  })
+
+  it("rejects an empty selection, so there is never a file with no columns", () => {
+    expect(parseExportColumns("")).toBeNull()
+    expect(parseExportColumns(" , ")).toBeNull()
+  })
+
+  it("feeds toCsv a header that matches the selection", () => {
+    const columns = parseExportColumns("id,amount,currency")!
+    expect(toCsv([payment], columns)).toBe(
+      ["id,amount,currency", "pay_0001,$250.00,USD"].join("\n"),
+    )
+  })
+})
+
+describe("parseExportScope", () => {
+  it("defaults to the current filter", () => {
+    expect(parseExportScope(null)).toBe("filter")
+  })
+
+  it("accepts the two known scopes and nothing else", () => {
+    expect(parseExportScope("all")).toBe("all")
+    expect(parseExportScope("filter")).toBe("filter")
+    expect(parseExportScope("everything")).toBeNull()
+  })
+})
+
+describe("exportLabel", () => {
+  it("names the status when the filter has one", () => {
+    expect(exportLabel("filter", { status: "disputed" })).toBe("disputed")
+  })
+
+  it("says all for the all scope, whatever the filter", () => {
+    expect(exportLabel("all", { status: "disputed" })).toBe("all")
+  })
+
+  it("never puts search text or a merchant id in the filename", () => {
+    expect(exportLabel("filter", { search: "../../etc", merchantId: "mch_01" })).toBe(
+      "filtered",
+    )
+  })
+
+  it("says all when the current filter is empty", () => {
+    expect(exportLabel("filter", { status: "all" })).toBe("all")
   })
 })

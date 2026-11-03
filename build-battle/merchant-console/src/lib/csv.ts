@@ -1,13 +1,13 @@
 import { merchantById } from "@/data/merchants"
-import { Payment } from "@/data/types"
+import { Payment, PaymentFilters, PaymentStatus } from "@/data/types"
 import { formatMoney } from "./money"
 
 /**
  * CSV export for the payments table.
  *
- * The column set is fixed. Ops has asked for control over it — that is
- * NWP-101 — but today everyone gets every column, including the card
- * last four, whether or not the file is going to a merchant.
+ * Ops chooses the columns and the scope (NWP-101). Both arrive from the
+ * client, so the route validates them here against these allowlists before
+ * they reach the serializer or the filename.
  */
 
 export const EXPORT_COLUMNS = [
@@ -24,6 +24,63 @@ export const EXPORT_COLUMNS = [
 ] as const
 
 export type ExportColumn = (typeof EXPORT_COLUMNS)[number]
+
+/** Card last four stays out unless someone asks for it. */
+export const DEFAULT_EXPORT_COLUMNS: readonly ExportColumn[] =
+  EXPORT_COLUMNS.filter((column) => column !== "last4")
+
+export const EXPORT_SCOPES = ["filter", "all"] as const
+
+export type ExportScope = (typeof EXPORT_SCOPES)[number]
+
+/**
+ * Parse the `columns` param: a comma-separated list, kept in the order given.
+ * Absent means the default set. Returns null for an unknown name or an empty
+ * selection, so the route can reject rather than write an empty file.
+ */
+export function parseExportColumns(param: string | null): ExportColumn[] | null {
+  if (param === null) return [...DEFAULT_EXPORT_COLUMNS]
+
+  const names = param
+    .split(",")
+    .map((name) => name.trim())
+    .filter(Boolean)
+  if (names.length === 0) return null
+
+  const columns: ExportColumn[] = []
+  for (const name of names) {
+    if (!(EXPORT_COLUMNS as readonly string[]).includes(name)) return null
+    const column = name as ExportColumn
+    if (!columns.includes(column)) columns.push(column)
+  }
+  return columns
+}
+
+/** Parse the `scope` param. Absent means the current filter; anything unknown is null. */
+export function parseExportScope(param: string | null): ExportScope | null {
+  if (param === null) return "filter"
+  return (EXPORT_SCOPES as readonly string[]).includes(param)
+    ? (param as ExportScope)
+    : null
+}
+
+export type ExportLabel = PaymentStatus | "all" | "filtered"
+
+/**
+ * The scope part of the filename. Built only from allowlisted values, never
+ * from search text or a merchant id, so client input cannot reach the header.
+ */
+export function exportLabel(
+  scope: ExportScope,
+  filters: PaymentFilters,
+): ExportLabel {
+  if (scope === "all") return "all"
+  if (filters.status && filters.status !== "all") return filters.status
+  if (filters.merchantId || filters.search || filters.from || filters.to) {
+    return "filtered"
+  }
+  return "all"
+}
 
 function escapeCell(value: string): string {
   if (/[",\n]/.test(value)) return `"${value.replace(/"/g, '""')}"`
@@ -66,6 +123,7 @@ export function toCsv(
   return [header, ...rows].join("\n")
 }
 
-export function exportFilename(date = new Date()): string {
-  return `payments-${date.toISOString().slice(0, 10)}.csv`
+export function exportFilename(date = new Date(), label?: ExportLabel): string {
+  const scope = label ? `${label}-` : ""
+  return `payments-${scope}${date.toISOString().slice(0, 10)}.csv`
 }
